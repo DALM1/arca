@@ -1,0 +1,3 @@
+[workspace]
+members = ["arca", "arca-server"]
+resolver = "2"
