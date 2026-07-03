@@ -1,2 +1,6 @@
 /target
 **/*.rs.bk
+specifications_sync_e2ee.md
+arca-server.sqlite
+arca-server.sqlite-shm
+arca-server.sqlite-wal

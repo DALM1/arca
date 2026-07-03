@@ -56,6 +56,11 @@ et hautes performances.
     depuis un appareil déjà autorisé ou via une clé de récupération.
 -   Prévoir rotation, révocation et perte d'appareil.
 -   Le mot de passe ne doit jamais quitter la machine cliente.
+-   MVP : une identité cryptographique locale peut être dérivée au login puis
+    conservée localement dans la session cliente pour permettre upload, pull et
+    partage en CLI.
+-   Chaque utilisateur publie une clé publique au serveur afin de permettre le
+    partage E2EE sans exposer les clés de fichier en clair.
 
 ## Réponse à compromission
 
@@ -95,6 +100,51 @@ et hautes performances.
 Stockage objet compatible S3. Le serveur ne connaît que les objets
 chiffrés.
 
+## Authentification et contrôle d'accès
+
+-   Le serveur doit supporter `register` et `login` en ligne de commande.
+-   Chaque fichier ou objet logique appartient à un utilisateur propriétaire.
+-   Un utilisateur ne peut voir ou manipuler que ses propres fichiers, sauf si
+    un autre utilisateur lui partage explicitement un accès.
+-   Le partage doit être explicite, traçable et révocable.
+-   Le contrôle d'accès côté serveur s'applique au minimum sur les métadonnées,
+    les manifestes et les autorisations d'accès.
+-   Le chiffrement E2EE reste géré côté client ; le serveur applique les droits
+    mais ne doit pas connaître le contenu en clair.
+
+## API serveur MVP
+
+-   `POST /register`
+-   `POST /login`
+-   `POST /upload`
+-   `POST /share`
+-   `POST /unshare`
+-   `POST /delete`
+-   `GET /files`
+-   `GET /download`
+-   Authentification par jeton de session signé ou opaque.
+-   Le serveur stocke des blobs chiffrés opaques ; le chiffrement et le
+    déchiffrement des contenus ont lieu uniquement côté client.
+-   Déploiement possible sur un hôte distant via SSH, avec préférence pour des
+    clés SSH plutôt qu'un mot de passe interactif.
+
+## Flux E2EE MVP
+
+-   À la connexion, le client dérive localement une identité cryptographique
+    via Argon2id à partir du secret utilisateur.
+-   À chaque upload, le client génère une clé de fichier aléatoire.
+-   Le contenu est chiffré côté client via XChaCha20-Poly1305 avec cette clé
+    de fichier.
+-   La clé de fichier est encapsulée pour le propriétaire via sa clé publique.
+-   Lors d'un partage, le propriétaire récupère la clé de fichier puis
+    l'encapsule pour le destinataire via sa clé publique.
+-   HKDF dérive les clés de wrapping à partir du secret partagé et du chemin
+    logique distant.
+-   Le serveur ne manipule que des blobs chiffrés opaques et des clés de
+    fichier encapsulées.
+-   Au pull, le client télécharge le blob et la clé encapsulée qui lui
+    correspond, puis déchiffre localement le contenu.
+
 ## Modèle de données
 
 -   Workspace.
@@ -117,6 +167,8 @@ chiffrés.
     et déplacement.
 -   Le scan initial et le watch temps réel doivent produire le même modèle
     d'événements internes.
+-   Le MVP peut propager les suppressions via replay d'opérations locales, même
+    avant l'arrivée d'un historique complet.
 
 ## Conflits
 
@@ -159,10 +211,17 @@ chiffrés.
 ## CLI
 
 -   sync init
+-   sync register
 -   sync login
 -   sync watch
+-   sync watch --sync
 -   sync push
+-   sync upload
 -   sync pull
+-   sync list
+-   sync share
+-   sync unshare
+-   sync delete
 -   sync status
 -   sync diff
 -   sync history
@@ -174,11 +233,15 @@ chiffrés.
 ### MVP
 
 -   Watcher
+-   Watch avec upload auto des creations/modifications
 -   Chunking
 -   Upload
 -   Download
 -   Chiffrement
 -   CLI
+-   Register / login
+-   Upload CLI
+-   Contrôle d'accès propriétaire
 -   Reprise après crash
 -   Gestion minimale des conflits
 -   Journal local SQLite

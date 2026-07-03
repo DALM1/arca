@@ -34,6 +34,8 @@ pub struct AuthSession {
     pub server_url: String,
     pub username: String,
     pub token: String,
+    pub e2ee_private_key_b64: String,
+    pub e2ee_public_key_b64: String,
 }
 
 impl AppConfig {
@@ -50,11 +52,20 @@ impl AppConfig {
 }
 
 pub fn project_paths() -> Result<AppPaths> {
-    let dirs = ProjectDirs::from(QUALIFIER, ORGANIZATION, APPLICATION)
-        .context("Impossible de determiner les repertoires applicatifs")?;
-
-    let config_dir = dirs.config_dir().to_path_buf();
-    let data_dir = dirs.data_dir().to_path_buf();
+    let config_dir = match std::env::var("ARCA_CONFIG_DIR") {
+        Ok(path) => PathBuf::from(path),
+        Err(_) => ProjectDirs::from(QUALIFIER, ORGANIZATION, APPLICATION)
+            .context("Impossible de determiner les repertoires applicatifs")?
+            .config_dir()
+            .to_path_buf(),
+    };
+    let data_dir = match std::env::var("ARCA_DATA_DIR") {
+        Ok(path) => PathBuf::from(path),
+        Err(_) => ProjectDirs::from(QUALIFIER, ORGANIZATION, APPLICATION)
+            .context("Impossible de determiner les repertoires applicatifs")?
+            .data_dir()
+            .to_path_buf(),
+    };
 
     Ok(AppPaths {
         config_file: config_dir.join("config.toml"),

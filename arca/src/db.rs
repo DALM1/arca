@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::Path;
 
 use anyhow::{Context, Result};
@@ -16,6 +17,20 @@ pub struct FileRecord {
     pub relative_path: String,
     pub content_hash: String,
     pub size_bytes: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct PendingOp {
+    pub id: i64,
+    pub op_type: String,
+    pub target_path: Option<String>,
+    pub payload: Option<String>,
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+pub struct ReconcileSummary {
+    pub upserts: usize,
+    pub deletes: usize,
 }
 
 pub fn connect(database_path: &Path) -> Result<Connection> {
@@ -60,6 +75,13 @@ pub fn initialize(connection: &Connection) -> Result<()> {
     Ok(())
 }
 
+pub fn reset_local_state(connection: &Connection) -> Result<()> {
+    connection.execute("DELETE FROM file_index", [])?;
+    connection.execute("DELETE FROM pending_ops", [])?;
+    connection.execute("DELETE FROM devices", [])?;
+    Ok(())
+}
+
 pub fn status(connection: &Connection) -> Result<StatusSnapshot> {
     let schema_version = connection
         .query_row(
@@ -89,37 +111,48 @@ fn count(connection: &Connection, query: &str) -> Result<i64> {
     Ok(value)
 }
 
-pub fn replace_file_index(connection: &mut Connection, records: &[FileRecord]) -> Result<()> {
-    let transaction = connection.transaction()?;
-    transaction.execute("DELETE FROM file_index", [])?;
+pub fn reconcile_file_index(
+    connection: &Connection,
+    records: &[FileRecord],
+) -> Result<ReconcileSummary> {
+    let existing = list_indexed_files(connection)?
+        .into_iter()
+        .map(|record| (record.relative_path.clone(), record))
+        .collect::<HashMap<_, _>>();
+    let scanned = records
+        .iter()
+        .cloned()
+        .map(|record| (record.relative_path.clone(), record))
+        .collect::<HashMap<_, _>>();
 
-    {
-        let mut statement = transaction.prepare(
-            "INSERT INTO file_index (path, content_hash, size_bytes, updated_at)
-             VALUES (?1, ?2, ?3, CURRENT_TIMESTAMP)",
-        )?;
+    let mut summary = ReconcileSummary::default();
 
-        for record in records {
-            statement.execute(params![
-                record.relative_path,
-                record.content_hash,
-                record.size_bytes as i64,
-            ])?;
+    for record in records {
+        let changed = match existing.get(&record.relative_path) {
+            Some(previous) => {
+                previous.content_hash != record.content_hash
+                    || previous.size_bytes != record.size_bytes
+            }
+            None => true,
+        };
+
+        if changed {
+            upsert_file(connection, record)?;
+            summary.upserts += 1;
         }
     }
 
-    enqueue_pending_op(
-        &transaction,
-        "scan_complete",
-        None,
-        Some(format!("indexed={}", records.len())),
-    )?;
+    for path in existing.keys() {
+        if !scanned.contains_key(path) {
+            delete_file(connection, path)?;
+            summary.deletes += 1;
+        }
+    }
 
-    transaction.commit()?;
-    Ok(())
+    Ok(summary)
 }
 
-pub fn upsert_file(connection: &Connection, record: &FileRecord) -> Result<()> {
+pub fn upsert_file(connection: &Connection, record: &FileRecord) -> Result<i64> {
     connection.execute(
         "INSERT INTO file_index (path, content_hash, size_bytes, updated_at)
          VALUES (?1, ?2, ?3, CURRENT_TIMESTAMP)
@@ -142,7 +175,24 @@ pub fn upsert_file(connection: &Connection, record: &FileRecord) -> Result<()> {
     )
 }
 
-pub fn delete_file(connection: &Connection, relative_path: &str) -> Result<()> {
+pub fn upsert_file_index_only(connection: &Connection, record: &FileRecord) -> Result<()> {
+    connection.execute(
+        "INSERT INTO file_index (path, content_hash, size_bytes, updated_at)
+         VALUES (?1, ?2, ?3, CURRENT_TIMESTAMP)
+         ON CONFLICT(path) DO UPDATE SET
+             content_hash = excluded.content_hash,
+             size_bytes = excluded.size_bytes,
+             updated_at = CURRENT_TIMESTAMP",
+        params![
+            record.relative_path,
+            record.content_hash,
+            record.size_bytes as i64,
+        ],
+    )?;
+    Ok(())
+}
+
+pub fn delete_file(connection: &Connection, relative_path: &str) -> Result<i64> {
     connection.execute(
         "DELETE FROM file_index WHERE path = ?1",
         params![relative_path],
@@ -160,10 +210,64 @@ fn enqueue_pending_op(
     op_type: &str,
     target_path: Option<String>,
     payload: Option<String>,
-) -> Result<()> {
+) -> Result<i64> {
     connection.execute(
         "INSERT INTO pending_ops (op_type, target_path, payload) VALUES (?1, ?2, ?3)",
         params![op_type, target_path, payload],
     )?;
+    Ok(connection.last_insert_rowid())
+}
+
+pub fn list_pending_ops(connection: &Connection, limit: usize) -> Result<Vec<PendingOp>> {
+    let mut statement = connection.prepare(
+        "SELECT id, op_type, target_path, payload
+         FROM pending_ops
+         ORDER BY id ASC
+         LIMIT ?1",
+    )?;
+    let rows = statement.query_map(params![limit as i64], |row| {
+        Ok(PendingOp {
+            id: row.get(0)?,
+            op_type: row.get(1)?,
+            target_path: row.get(2)?,
+            payload: row.get(3)?,
+        })
+    })?;
+
+    let mut ops = Vec::new();
+    for row in rows {
+        ops.push(row?);
+    }
+    Ok(ops)
+}
+
+pub fn delete_pending_op(connection: &Connection, id: i64) -> Result<()> {
+    connection.execute("DELETE FROM pending_ops WHERE id = ?1", params![id])?;
     Ok(())
+}
+
+pub fn delete_pending_ops_for_path(connection: &Connection, path: &str) -> Result<()> {
+    connection.execute(
+        "DELETE FROM pending_ops WHERE target_path = ?1",
+        params![path],
+    )?;
+    Ok(())
+}
+
+fn list_indexed_files(connection: &Connection) -> Result<Vec<FileRecord>> {
+    let mut statement = connection
+        .prepare("SELECT path, content_hash, size_bytes FROM file_index ORDER BY path")?;
+    let rows = statement.query_map([], |row| {
+        Ok(FileRecord {
+            relative_path: row.get(0)?,
+            content_hash: row.get(1)?,
+            size_bytes: row.get::<_, i64>(2)? as u64,
+        })
+    })?;
+
+    let mut files = Vec::new();
+    for row in rows {
+        files.push(row?);
+    }
+    Ok(files)
 }

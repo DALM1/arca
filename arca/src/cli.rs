@@ -41,24 +41,67 @@ pub enum Command {
     Watch {
         #[arg(long)]
         once: bool,
-    },
-    Upload {
         #[arg(long)]
-        path: String,
+        sync: bool,
+    },
+    Push,
+    Upload {
+        #[arg(value_name = "PATH")]
+        path: Option<String>,
+        #[arg(long, hide = true)]
+        path_flag: Option<String>,
+        #[arg(short = 's', long = "secret")]
+        secret: bool,
         #[arg(long)]
         remote_path: Option<String>,
     },
     Share {
-        #[arg(long)]
-        path: String,
-        #[arg(long)]
-        with_user: String,
+        #[arg(value_name = "PATH")]
+        path: Option<String>,
+        #[arg(value_name = "USER")]
+        with_user: Option<String>,
+        #[arg(long, hide = true)]
+        path_flag: Option<String>,
+        #[arg(long, hide = true)]
+        with_user_flag: Option<String>,
     },
-    Pull,
+    Unshare {
+        #[arg(value_name = "PATH")]
+        path: Option<String>,
+        #[arg(value_name = "USER")]
+        with_user: Option<String>,
+        #[arg(long, hide = true)]
+        path_flag: Option<String>,
+        #[arg(long, hide = true)]
+        with_user_flag: Option<String>,
+    },
+    List,
+    Pull {
+        #[arg(value_name = "REMOTE_PATH")]
+        remote_path: Option<String>,
+        #[arg(value_name = "OUTPUT")]
+        output: Option<String>,
+        #[arg(long, hide = true)]
+        remote_path_flag: Option<String>,
+        #[arg(long, hide = true)]
+        output_flag: Option<String>,
+    },
+    Delete {
+        #[arg(value_name = "REMOTE_PATH")]
+        remote_path: Option<String>,
+        #[arg(long, hide = true)]
+        remote_path_flag: Option<String>,
+    },
     Status,
     Diff,
-    History,
-    Restore,
+    History {
+        #[arg(long)]
+        path: Option<String>,
+    },
+    Restore {
+        #[arg(long)]
+        target_dir: Option<String>,
+    },
     Nuke {
         #[arg(long)]
         local: bool,
